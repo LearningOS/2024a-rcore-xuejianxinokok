@@ -1,7 +1,7 @@
 //! Types related to task management & Functions for completely changing TCB
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{DEFAULT_PRIPORITY, MAX_SYSCALL_NUM, TRAP_CONTEXT_BASE};
 use crate::fs::{File, Stdin, Stdout};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
@@ -49,6 +49,7 @@ pub struct TaskControlBlockInner {
     /// Save task context
     pub task_cx: TaskContext,
 
+
     /// Maintain the execution status of the current process
     pub task_status: TaskStatus,
 
@@ -71,6 +72,15 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+    ///  启动时间(单位ms)
+    pub start_time: usize,
+    /// 系统调用次数
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+
+    /// 进程的Stride值
+    pub stride: usize,
+    /// 进程的优先级
+    pub priority: isize,
 }
 
 impl TaskControlBlockInner {
@@ -135,8 +145,13 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: DEFAULT_PRIPORITY,
                 })
             },
+
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
@@ -216,6 +231,10 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: DEFAULT_PRIPORITY,
                 })
             },
         });
@@ -261,6 +280,108 @@ impl TaskControlBlock {
             None
         }
     }
+
+
+    /// 增加当前系统调用次数
+    pub fn inc_current_syscall_times(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        inner.syscall_times[syscall_id] += 1;
+    }
+    /// 获取当前进程信息
+    pub fn get_current_task_info(&self) -> (TaskStatus, [u32; MAX_SYSCALL_NUM], usize) {
+        let inner = self.inner.exclusive_access();
+        (inner.task_status, inner.syscall_times, inner.start_time)
+    }
+
+    /// 隐射内存
+    pub fn map_memory(& self, start: usize, len: usize, port: usize) -> isize {
+        let start_va = VirtAddr(start);
+        let end_va = VirtAddr(start + len);
+        let mut inner = self.inner_exclusive_access();
+        inner.memory_set.map_memory(start_va, end_va, port as u8)
+    }
+
+    /// 取消内存隐射
+    pub fn unmap_memory(& self, start: usize, len: usize) -> isize {
+        let start_va = VirtAddr(start);
+        let end_va = VirtAddr(start + len);
+        let mut inner = self.inner_exclusive_access();
+        inner.memory_set.unmap_memory(start_va, end_va)
+    }
+
+    /// parent process spawn the child process
+    pub fn spawn(self: &Arc<Self>, elf_data: &[u8]) -> Arc<Self> {
+        // ---- access parent PCB exclusively
+        let mut parent_inner = self.inner_exclusive_access();
+        // memory_set with elf program headers/trampoline/trap context/user stack
+        let (memory_set, user_sp, entry_point) = MemorySet::from_elf(elf_data);
+        let trap_cx_ppn = memory_set
+            .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
+            .unwrap()
+            .ppn();
+        // alloc a pid and a kernel stack in kernel space
+        let pid_handle = pid_alloc();
+        let kernel_stack = kstack_alloc();
+        let kernel_stack_top = kernel_stack.get_top();
+        let task_control_block = Arc::new(TaskControlBlock {
+            pid: pid_handle,
+            kernel_stack,
+            inner: unsafe {
+                UPSafeCell::new(TaskControlBlockInner {
+                    trap_cx_ppn,
+                    base_size: user_sp,
+                    task_cx: TaskContext::goto_trap_return(kernel_stack_top),
+                    task_status: TaskStatus::Ready,
+                    memory_set,
+                    parent: Some(Arc::downgrade(self)),
+                    children: Vec::new(),
+                    exit_code: 0,
+                    fd_table: vec![
+                        // 0 -> stdin
+                        Some(Arc::new(Stdin)),
+                        // 1 -> stdout
+                        Some(Arc::new(Stdout)),
+                        // 2 -> stderr
+                        Some(Arc::new(Stdout)),
+                    ],
+                    heap_bottom: user_sp, //parent_inner.heap_bottom,
+                    program_brk: user_sp, //parent_inner.program_brk,
+                    start_time: 0,
+                    syscall_times: [0; MAX_SYSCALL_NUM],
+                    stride: 0,
+                    priority: DEFAULT_PRIPORITY,
+                })
+            },
+        });
+        // add child
+        parent_inner.children.push(task_control_block.clone());
+        
+        let trap_cx = task_control_block.inner_exclusive_access().get_trap_cx();
+        *trap_cx = TrapContext::app_init_context(
+            entry_point,
+            user_sp,
+            KERNEL_SPACE.exclusive_access().token(),
+            self.kernel_stack.get_top(),
+            trap_handler as usize,
+        );
+        trap_cx.kernel_sp = kernel_stack_top;
+
+        // **** release child PCB
+        // ---- release parent PCB
+
+        drop(parent_inner);
+
+        // return
+        task_control_block
+    }
+
+    /// 增加当前系统调用次数
+    pub fn set_priority(&self, priority: isize) {
+        let mut inner = self.inner.exclusive_access();
+        inner.priority = priority;
+    }
+
+
 }
 
 #[derive(Copy, Clone, PartialEq)]
