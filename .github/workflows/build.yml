@@ -97,3 +97,4 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$score_json" \
             -v
+
