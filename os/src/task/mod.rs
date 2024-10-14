@@ -20,6 +20,8 @@ use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
+use crate::timer::get_time_ms;
+use crate::config::MAX_SYSCALL_NUM;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -53,7 +55,6 @@ lazy_static! {
     pub static ref TASK_MANAGER: TaskManager = {
         println!("init TASK_MANAGER");
         let num_app = get_num_app();
-        println!("num_app = {}", num_app);
         let mut tasks: Vec<TaskControlBlock> = Vec::new();
         for i in 0..num_app {
             tasks.push(TaskControlBlock::new(get_app_data(i), i));
@@ -79,7 +80,11 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.task_status = TaskStatus::Running;
+        // 记录开始时间
+        next_task.start_time = get_time_ms();
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
+
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -140,6 +145,11 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            // 只在第一次运行时记录开始时间
+            if inner.tasks[next].start_time<=0 {
+                // 记录开始时间
+                 inner.tasks[next].start_time = get_time_ms();
+              }
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -153,6 +163,34 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// 增加当前系统调用次数
+    fn inc_current_syscall_times(&self,syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].syscall_times[syscall_id] +=1;
+    }
+    /// 获取当前进程信息
+    fn get_current_task_info(&self)->(TaskStatus,[u32; MAX_SYSCALL_NUM],usize){
+        let  inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        (inner.tasks[current].task_status,inner.tasks[current].syscall_times,inner.tasks[current].start_time)
+    }
+
+    /// 隐射内存
+    pub fn map_memory(&self, start: usize, len: usize, port: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].map_memory(start, len, port)
+    }
+
+    /// 取消内存隐射
+    pub fn unmap_memory(&self, start: usize, len: usize) -> isize {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].unmap_memory(start, len)
+    }
+
 }
 
 /// Run the first task in task list.
@@ -188,6 +226,7 @@ pub fn exit_current_and_run_next() {
     run_next_task();
 }
 
+
 /// Get the current 'Running' task's token.
 pub fn current_user_token() -> usize {
     TASK_MANAGER.get_current_token()
@@ -202,3 +241,24 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
 }
+
+/// 增加当前进程系统调用次数
+pub fn  inc_current_syscall_times(syscall_id: usize){
+    TASK_MANAGER.inc_current_syscall_times(syscall_id);
+}
+
+/// 获取当前进程信息
+pub fn get_current_task_info()->(TaskStatus,[u32; MAX_SYSCALL_NUM],usize){
+    TASK_MANAGER.get_current_task_info()
+}
+
+/// 隐射内存
+pub fn map_memory(start: usize, len: usize, port: usize) -> isize {
+    TASK_MANAGER.map_memory(start, len, port)
+}
+
+/// 取消内存隐射
+pub fn unmap_memory(start: usize, len: usize) -> isize {
+    TASK_MANAGER.unmap_memory(start, len)
+}
+
