@@ -76,7 +76,6 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
-/// YOUR JOB: Implement fstat.
 pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
     trace!("kernel:pid[{}] sys_fstat", current_task().unwrap().pid.0);
 
@@ -86,11 +85,7 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
         return -1;
     }
     if let Some(file) = &inner.fd_table[fd] {
-        // let file = file.clone();
-        // if !file.readable() {
-        //     return -1;
-        // }
-        // release current task TCB manually to avoid multi-borrow
+       
         trace!("kernel: sys_fstat .. file.stat");
         //获取元数据
         let stat = file.stat();
@@ -104,7 +99,6 @@ pub fn sys_fstat(fd: usize, st: *mut Stat) -> isize {
         // 注意此处不能获取buffers.as_mut_ptr()
         let dst_ptr: *mut Stat = buffers[0].as_mut_ptr() as *mut Stat;
         unsafe {
-            //第三个参数应该是1 还是len ??
             core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, 1);
         }
 

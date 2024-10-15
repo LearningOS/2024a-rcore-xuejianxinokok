@@ -10,10 +10,11 @@ use spin::{Mutex, MutexGuard};
 pub struct Inode {
     block_id: usize,
     block_offset: usize,
-    fs: Arc<Mutex<EasyFileSystem>>,
-    block_device: Arc<dyn BlockDevice>,
     /// inode 文件所在 inode 编号
     inode_id: u32,
+    fs: Arc<Mutex<EasyFileSystem>>,
+    block_device: Arc<dyn BlockDevice>,
+   
 }
 
 impl Inode {
@@ -21,16 +22,16 @@ impl Inode {
     pub fn new(
         block_id: u32,
         block_offset: usize,
+        inode_id: u32,
         fs: Arc<Mutex<EasyFileSystem>>,
         block_device: Arc<dyn BlockDevice>,
-        inode_id: u32,
     ) -> Self {
         Self {
             block_id: block_id as usize,
             block_offset,
+            inode_id,
             fs,
             block_device,
-            inode_id,
         }
     }
     /// Call a function over a disk inode to read it
@@ -71,9 +72,9 @@ impl Inode {
                 Arc::new(Self::new(
                     block_id,
                     block_offset,
+                    inode_id,
                     self.fs.clone(),
                     self.block_device.clone(),
-                    inode_id,
                 ))
             })
         })
@@ -138,9 +139,9 @@ impl Inode {
         Some(Arc::new(Self::new(
             block_id,
             block_offset,
+            new_inode_id,
             self.fs.clone(),
             self.block_device.clone(),
-            new_inode_id,
         )))
         // release efs lock automatically by compiler
     }
@@ -232,22 +233,7 @@ impl Inode {
 
     /// link inode under current inode by name
     pub fn unlinkat(&self, parent_inode: Arc<Inode>, path: &str) -> isize {
-        //在父目录删除 path,如何删除?
-        // parent_inode.modify_disk_inode(|root_inode| {
-        //     // append file in the dirent
-        //     let file_count = (root_inode.size as usize) / DIRENT_SZ;
-        //     let new_size = (file_count - 1) * DIRENT_SZ;
-        //     // increase size
-        //     self.increase_size(new_size as u32, root_inode, &mut fs);
-        //     // write dirent
-        //     let dirent = DirEntry::empty();
-
-        //     root_inode.write_at(
-        //         file_count * DIRENT_SZ,
-        //         dirent.as_bytes(),
-        //         &self.block_device,
-        //     );
-        // });
+        
 
         let mut fs: MutexGuard<EasyFileSystem> = self.fs.lock();
         let mut idx= -1i32;
